@@ -1,0 +1,56 @@
+[project]
+authors = ["Jakub Prüher <jacobnzw@gmail.com>"]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+name = "pscan_torch"
+platforms = ["linux-64"]
+version = "0.0.0"
+
+[feature.cuda]
+system-requirements = { cuda = "12" }
+channels = ["nvidia"]
+
+[feature.cuda.dependencies]
+cuda-toolkit = "12.*" # for compute-sanitizer etc.
+cuda-gdb = "12.*"     # for GPU kernel debugging
+nsight-compute = "*"  # interactive kernel profiling
+
+[feature.cuda.pypi-dependencies]
+torch = { version = "==2.7.1", index = "https://download.pytorch.org/whl/cu128" }
+
+[feature.rocm]
+system-requirements = {}
+
+[feature.rocm.pypi-dependencies]
+torch = { version = "==2.7.1", index = "https://download.pytorch.org/whl/rocm6.3" }
+pytorch-triton-rocm = { version = "*", index = "https://download.pytorch.org/whl/rocm6.3" }
+
+[dependencies]
+python = "==3.12"
+max = "*"            # includes `mojo-compiler`
+mojo = "*"           # includes lsp, debugger, formatter etc.
+bash = ">=5.2.21,<6"
+# manim = ">=0.18.1,<0.19"
+# mdbook = ">=0.4.48,<0.5"
+# pre-commit = ">=4.2.0,<5"
+
+
+[environments]
+cuda = { features = ["cuda"], solve-group = "cuda" }
+rocm = { features = ["rocm"], solve-group = "rocm" }
+default = { features = ["cuda"] }
+
+[tasks]
+prefix-sum-simple = "python torch/prefix_sum_simple.py"
+prefix-sum-multiblock = "python torch/prefix_sum_multiblock.py"
+
+# install-pre-commit = "pre-commit install"
+# format = { cmd="mojo format problems solutions", depends-on = ["install-pre-commit"] }
+
+# # Fix conda cuda-gdb by linking to system CUDA installation
+setup-cuda-gdb = { cmd = "ln -sf /usr/local/cuda/bin/cuda-gdb-minimal $CONDA_PREFIX/bin/cuda-gdb-minimal && ln -sf /usr/local/cuda/bin/cuda-gdb-python3.12-tui $CONDA_PREFIX/bin/cuda-gdb-python3.12-tui", description = "Link system CUDA-GDB binaries to conda environment" }
+
+memcheck = { cmd = "bash solutions/sanitizer.sh memcheck" }
+racecheck = { cmd = "bash solutions/sanitizer.sh racecheck" }
+synccheck = { cmd = "bash solutions/sanitizer.sh synccheck" }
+initcheck = { cmd = "bash solutions/sanitizer.sh initcheck" }
+sanitizers = { cmd = "bash solutions/sanitizer.sh all" }
