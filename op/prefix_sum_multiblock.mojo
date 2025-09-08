@@ -11,12 +11,6 @@ from testing import assert_equal
 
 
 alias TPB = 8
-alias SIZE = 15
-alias BLOCKS_PER_GRID = (2, 1)
-alias THREADS_PER_BLOCK = (TPB, 1)
-alias EXTENDED_SIZE = SIZE + 2  # up to 2 blocks
-alias layout = Layout.row_major(SIZE)
-alias extended_layout = Layout.row_major(EXTENDED_SIZE)
 alias dtype = DType.float32
 
 
@@ -30,28 +24,16 @@ fn prefix_sum_local_phase[
 ):
     global_i = block_dim.x * block_idx.x + thread_idx.x
     local_i = thread_idx.x
+    # TPB has to be a compile-time constant for shared memory allocation
     shared = tb[dtype]().row_major[TPB]().shared().alloc()
 
     # Load data into shared memory
-    # Example with SIZE=15, TPB=8, BLOCKS=2:
-    # Block 0 shared mem: [0,1,2,3,4,5,6,7]
-    # Block 1 shared mem: [8,9,10,11,12,13,14,uninitialized]
-    # Note: The last position remains uninitialized since global_i >= size,
-    # but this is safe because that thread doesn't participate in computation
     if global_i < size:
         shared[local_i] = a[global_i]
 
     barrier()
 
     # Compute local prefix sum using parallel reduction
-    # This uses a tree-based algorithm with log(TPB) iterations
-    # Iteration 1 (offset=1):
-    #   Block 0: [0,0+1,2+1,3+2,4+3,5+4,6+5,7+6] = [0,1,3,5,7,9,11,13]
-    # Iteration 2 (offset=2):
-    #   Block 0: [0,1,3+0,5+1,7+3,9+5,11+7,13+9] = [0,1,3,6,10,14,18,22]
-    # Iteration 3 (offset=4):
-    #   Block 0: [0,1,3,6,10+0,14+1,18+3,22+6] = [0,1,3,6,10,15,21,28]
-    #   Block 1 follows same pattern to get [8,17,27,38,50,63,77,???]
     offset = 1
     for i in range(Int(log2(Scalar[dtype](TPB)))):
         var current_val: output.element_type = 0
@@ -66,17 +48,10 @@ fn prefix_sum_local_phase[
         offset *= 2
 
     # Write local results to output
-    # Block 0 writes: [0,1,3,6,10,15,21,28]
-    # Block 1 writes: [8,17,27,38,50,63,77,???]
     if global_i < size:
         output[global_i] = shared[local_i]
 
     # Store block sums in auxiliary space
-    # Block 0: Thread 7 stores shared[7] == 28 at position size+0 (position 15)
-    # Block 1: Thread 7 stores shared[7] == ??? at position size+1 (position 16).  This sum is not needed for the final output.
-    # This gives us: [0,1,3,6,10,15,21,28, 8,17,27,38,50,63,77, 28,???]
-    #                                                           ↑  ↑
-    #                                                     Block sums here
     if local_i == TPB - 1:
         output[size + block_idx.x] = shared[local_i]
 
@@ -88,12 +63,6 @@ fn prefix_sum_block_sum_phase[
     global_i = block_dim.x * block_idx.x + thread_idx.x
 
     # Second pass: add previous block's sum to each element
-    # Block 0: No change needed - already correct
-    # Block 1: Add Block 0's sum (28) to each element
-    #   Before: [8,17,27,38,50,63,77]
-    #   After: [36,45,55,66,78,91,105]
-    # Final result combines both blocks:
-    # [0,1,3,6,10,15,21,28, 36,45,55,66,78,91,105]
     if block_idx.x > 0 and global_i < size:
         prev_block_sum = output[size + block_idx.x - 1]
         output[global_i] += prev_block_sum
@@ -121,7 +90,8 @@ struct PrefixSumMultiBlockOp:
     ) raises:
         out_tensor = output.to_layout_tensor()
         input_tensor = input.to_layout_tensor()
-        alias layout = input_tensor.layout
+        alias out_layout = out_tensor.layout
+        alias in_layout = input_tensor.layout
 
         @parameter
         if target == "gpu":
@@ -129,17 +99,20 @@ struct PrefixSumMultiBlockOp:
 
             # Compute optimal block size (multiple of warp size)
             # TODO: Inputs size < WARP_SIZE, wastes threads if tbp=WARP_SIZE, no? Matters even?
-            size = layout.size()
-            WARP_SIZE = gpu_ctx.get_attribute(DeviceAttribute.WARP_SIZE)
-            MAX_TPB = gpu_ctx.get_attribute(
-                DeviceAttribute.MAX_THREADS_PER_BLOCK
-            )
-            optimal_tpb = min(
-                MAX_TPB,
-                ((size + WARP_SIZE - 1) // WARP_SIZE) * WARP_SIZE,
-            )
+            size = in_layout.size()
+            # WARP_SIZE = gpu_ctx.get_attribute(DeviceAttribute.WARP_SIZE)
+            # MAX_TPB = gpu_ctx.get_attribute(
+            #     DeviceAttribute.MAX_THREADS_PER_BLOCK
+            # )
+            # optimal_tpb = min(
+            #     MAX_TPB,
+            #     ((size + WARP_SIZE - 1) // WARP_SIZE) * WARP_SIZE,
+            # )
+            # blocks_needed = (size + optimal_tpb - 1) // optimal_tpb
+            # print("size:", size)
+            # print("max_tpb:", MAX_TPB)
+            optimal_tpb = TPB
             blocks_needed = (size + optimal_tpb - 1) // optimal_tpb
-            print("size:", size)
             print("optimal_tpb:", optimal_tpb)
             print("blocks_needed:", blocks_needed)
             #
@@ -149,13 +122,15 @@ struct PrefixSumMultiBlockOp:
                 DeviceBuffer[output.dtype](
                     gpu_ctx,
                     rebind[UnsafePointer[Scalar[output.dtype]]](out_tensor.ptr),
-                    size,
+                    out_layout.size(),
                     owning=False,
                 ),
                 0,
             )
             # Phase 1: Local prefix sums
-            gpu_ctx.enqueue_function[prefix_sum_local_phase[layout, layout]](
+            gpu_ctx.enqueue_function[
+                prefix_sum_local_phase[out_layout, in_layout]
+            ](
                 out_tensor,
                 input_tensor,
                 size,
@@ -163,16 +138,15 @@ struct PrefixSumMultiBlockOp:
                 block_dim=optimal_tpb,
             )
 
-            gpu_ctx.synchronize()
-
             # Phase 2: Add block sums
-            gpu_ctx.enqueue_function[prefix_sum_block_sum_phase[layout]](
+            gpu_ctx.enqueue_function[prefix_sum_block_sum_phase[out_layout]](
                 out_tensor,
                 size,
                 grid_dim=blocks_needed,
                 block_dim=optimal_tpb,
             )
 
+            gpu_ctx.synchronize()
         elif target == "cpu":
             # we can fallback to CPU
             print("pscan: falling back to CPU")
@@ -183,6 +157,12 @@ struct PrefixSumMultiBlockOp:
 
 # TODO: move to test folder?
 def test_kernel():
+    alias SIZE = 15
+    alias BLOCKS_PER_GRID = (2, 1)
+    alias THREADS_PER_BLOCK = (TPB, 1)
+    alias EXTENDED_SIZE = SIZE + 2  # up to 2 blocks
+    alias layout = Layout.row_major(SIZE)
+    alias extended_layout = Layout.row_major(EXTENDED_SIZE)
     with DeviceContext() as ctx:
         size = SIZE
         num_blocks = (size + TPB - 1) // TPB
