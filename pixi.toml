@@ -41,7 +41,7 @@ default = { features = ["cuda"] }
 
 [tasks]
 prefix-sum-simple = "python torch/prefix_sum_simple.py"
-prefix-sum-multiblock = "python torch/prefix_sum_multiblock.py"
+prefix-sum-multiblock = "MODULAR_DEVICE_CONTEXT_SYNC_MODE=true python torch/prefix_sum_multiblock.py"
 
 # install-pre-commit = "pre-commit install"
 # format = { cmd="mojo format problems solutions", depends-on = ["install-pre-commit"] }
