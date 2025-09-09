@@ -10,7 +10,10 @@ from testing import assert_equal
 # Hillis Steel parallel scan with sum as associative operator.
 
 
+alias SIZE = 30
 alias TPB = 8
+alias BLOCKS = 4
+alias BLOCKS_PER_GRID = (BLOCKS, 1)
 alias dtype = DType.float32
 
 
@@ -64,7 +67,15 @@ fn prefix_sum_block_sum_phase[
 
     # Second pass: add previous block's sum to each element
     if block_idx.x > 0 and global_i < size:
-        prev_block_sum = output[size + block_idx.x - 1]
+        # FIX: need to add all all previous block sums
+        var prev_block_sum: output.element_type = 0
+        for i in range(block_idx.x):
+            # NOTE: sum accumulated in prev_block_sum register as it 
+            # can't be accumulated directly to output[global_i]
+            # Disadvantages: 
+            # - Thread divergence (threads with higher block_idx.x do more work)
+            # - Threads repeat the same work
+            prev_block_sum += output[size + i]
         output[global_i] += prev_block_sum
 
 
@@ -156,11 +167,9 @@ struct PrefixSumMultiBlockOp:
 
 
 # TODO: move to test folder?
-def test_kernel():
-    alias SIZE = 15
-    alias BLOCKS_PER_GRID = (2, 1)
+def main():
     alias THREADS_PER_BLOCK = (TPB, 1)
-    alias EXTENDED_SIZE = SIZE + 2  # up to 2 blocks
+    alias EXTENDED_SIZE = SIZE + BLOCKS
     alias layout = Layout.row_major(SIZE)
     alias extended_layout = Layout.row_major(EXTENDED_SIZE)
     with DeviceContext() as ctx:
@@ -213,14 +222,11 @@ def test_kernel():
             for i in range(1, size):
                 expected[i] = expected[i - 1] + a_host[i]
 
-        with out.map_to_host() as out_host:
-            print(
-                "Note: we print the extended buffer here, but we only need"
-                " to print the first `size` elements"
-            )
+            print("in:", a_host)
 
+        with out.map_to_host() as out_host:
             print("out:", out_host)
-            print("expected:", expected)
+            print("exp:", expected)
             # Here we need to use the size of the original array, not the extended one
             size = SIZE
             for i in range(size):
