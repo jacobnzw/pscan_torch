@@ -70,9 +70,9 @@ fn prefix_sum_block_sum_phase[
         # FIX: need to add all all previous block sums
         var prev_block_sum: output.element_type = 0
         for i in range(block_idx.x):
-            # NOTE: sum accumulated in prev_block_sum register as it 
+            # NOTE: sum accumulated in prev_block_sum register as it
             # can't be accumulated directly to output[global_i]
-            # Disadvantages: 
+            # Disadvantages:
             # - Thread divergence (threads with higher block_idx.x do more work)
             # - Threads repeat the same work
             prev_block_sum += output[size + i]
@@ -167,67 +167,67 @@ struct PrefixSumMultiBlockOp:
 
 
 # TODO: move to test folder?
-def main():
-    alias THREADS_PER_BLOCK = (TPB, 1)
-    alias EXTENDED_SIZE = SIZE + BLOCKS
-    alias layout = Layout.row_major(SIZE)
-    alias extended_layout = Layout.row_major(EXTENDED_SIZE)
-    with DeviceContext() as ctx:
-        size = SIZE
-        num_blocks = (size + TPB - 1) // TPB
+# def main():
+#     alias THREADS_PER_BLOCK = (TPB, 1)
+#     alias EXTENDED_SIZE = SIZE + BLOCKS
+#     alias layout = Layout.row_major(SIZE)
+#     alias extended_layout = Layout.row_major(EXTENDED_SIZE)
+#     with DeviceContext() as ctx:
+#         size = SIZE
+#         num_blocks = (size + TPB - 1) // TPB
 
-        if num_blocks > EXTENDED_SIZE - SIZE:
-            raise Error("Extended buffer too small for the number of blocks")
+#         if num_blocks > EXTENDED_SIZE - SIZE:
+#             raise Error("Extended buffer too small for the number of blocks")
 
-        buffer_size = EXTENDED_SIZE
-        out = ctx.enqueue_create_buffer[dtype](buffer_size).enqueue_fill(0)
-        a = ctx.enqueue_create_buffer[dtype](size).enqueue_fill(0)
+#         buffer_size = EXTENDED_SIZE
+#         out = ctx.enqueue_create_buffer[dtype](buffer_size).enqueue_fill(0)
+#         a = ctx.enqueue_create_buffer[dtype](size).enqueue_fill(0)
 
-        # Initialize input array as [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14]
-        with a.map_to_host() as a_host:
-            for i in range(size):
-                a_host[i] = i
+#         # Initialize input array as [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14]
+#         with a.map_to_host() as a_host:
+#             for i in range(size):
+#                 a_host[i] = i
 
-        a_tensor = LayoutTensor[mut=False, dtype, layout](a.unsafe_ptr())
+#         a_tensor = LayoutTensor[mut=False, dtype, layout](a.unsafe_ptr())
 
-        var out_tensor = LayoutTensor[mut=False, dtype, extended_layout](
-            out.unsafe_ptr()
-        )
+#         var out_tensor = LayoutTensor[mut=False, dtype, extended_layout](
+#             out.unsafe_ptr()
+#         )
 
-        # Phase 1: Local prefix sums
-        ctx.enqueue_function[
-            prefix_sum_local_phase[extended_layout, extended_layout]
-        ](
-            out_tensor,
-            a_tensor,
-            size,
-            grid_dim=BLOCKS_PER_GRID,
-            block_dim=THREADS_PER_BLOCK,
-        )
+#         # Phase 1: Local prefix sums
+#         ctx.enqueue_function[
+#             prefix_sum_local_phase[extended_layout, extended_layout]
+#         ](
+#             out_tensor,
+#             a_tensor,
+#             size,
+#             grid_dim=BLOCKS_PER_GRID,
+#             block_dim=THREADS_PER_BLOCK,
+#         )
 
-        # Phase 2: Add block sums
-        ctx.enqueue_function[prefix_sum_block_sum_phase[extended_layout]](
-            out_tensor,
-            size,
-            grid_dim=BLOCKS_PER_GRID,
-            block_dim=THREADS_PER_BLOCK,
-        )
+#         # Phase 2: Add block sums
+#         ctx.enqueue_function[prefix_sum_block_sum_phase[extended_layout]](
+#             out_tensor,
+#             size,
+#             grid_dim=BLOCKS_PER_GRID,
+#             block_dim=THREADS_PER_BLOCK,
+#         )
 
-        # Verify results for both cases
-        expected = ctx.enqueue_create_host_buffer[dtype](size).enqueue_fill(0)
-        ctx.synchronize()
+#         # Verify results for both cases
+#         expected = ctx.enqueue_create_host_buffer[dtype](size).enqueue_fill(0)
+#         ctx.synchronize()
 
-        with a.map_to_host() as a_host:
-            expected[0] = a_host[0]
-            for i in range(1, size):
-                expected[i] = expected[i - 1] + a_host[i]
+#         with a.map_to_host() as a_host:
+#             expected[0] = a_host[0]
+#             for i in range(1, size):
+#                 expected[i] = expected[i - 1] + a_host[i]
 
-            print("in:", a_host)
+#             print("in:", a_host)
 
-        with out.map_to_host() as out_host:
-            print("out:", out_host)
-            print("exp:", expected)
-            # Here we need to use the size of the original array, not the extended one
-            size = SIZE
-            for i in range(size):
-                assert_equal(out_host[i], expected[i])
+#         with out.map_to_host() as out_host:
+#             print("out:", out_host)
+#             print("exp:", expected)
+#             # Here we need to use the size of the original array, not the extended one
+#             size = SIZE
+#             for i in range(size):
+#                 assert_equal(out_host[i], expected[i])

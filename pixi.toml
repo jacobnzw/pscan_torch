@@ -29,9 +29,6 @@ python = "==3.12"
 max = "*"            # includes `mojo-compiler`
 mojo = "*"           # includes lsp, debugger, formatter etc.
 bash = ">=5.2.21,<6"
-# manim = ">=0.18.1,<0.19"
-# mdbook = ">=0.4.48,<0.5"
-# pre-commit = ">=4.2.0,<5"
 
 
 [environments]
@@ -40,8 +37,8 @@ rocm = { features = ["rocm"], solve-group = "rocm" }
 default = { features = ["cuda"] }
 
 [tasks]
-prefix-sum-simple = "python torch/prefix_sum_simple.py"
-prefix-sum-multiblock = "MODULAR_DEVICE_CONTEXT_SYNC_MODE=true python torch/prefix_sum_multiblock.py"
+test-all-wrappers = "python test_wrappers.py"
+test-mojo-multiblock = "mojo run test_prefix_sum_multiblock.mojo"
 
 # install-pre-commit = "pre-commit install"
 # format = { cmd="mojo format problems solutions", depends-on = ["install-pre-commit"] }
